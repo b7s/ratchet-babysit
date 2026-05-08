@@ -40,6 +40,12 @@ bash .claude/skills/ratchet-babysit/scripts/baseline_check.sh --compare
 bash .claude/skills/ratchet-babysit/scripts/baseline_check.sh --check
 ```
 
+## Tool Resolution & File Handling
+
+Each tool is resolved: `vendor/bin/<tool>` → `<tool>` in PATH → `~/.composer/vendor/bin/<tool>` → skip. Works with local (`composer require --dev`), global (`composer global require`), or standalone installs (PHAR, brew, apt).
+
+**No project directory writes except `baseline.json`.** All intermediate files use a temp directory auto-cleaned on exit.
+
 ## PHP Toolchain (run in order)
 
 1. **Security Audit** — `composer audit` (block on critical/high)

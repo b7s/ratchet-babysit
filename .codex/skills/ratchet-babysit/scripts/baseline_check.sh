@@ -4,16 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/../../../..")"
 BASELINE_FILE="$PROJECT_ROOT/baseline.json"
-REPORTS_DIR="$PROJECT_ROOT/reports"
-ACTIONS_FILE="$REPORTS_DIR/required_actions.txt"
 
-mkdir -p "$REPORTS"
+TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/ratchet-babysit.XXXXXX")
+trap 'rm -rf "$TMPDIR"' EXIT
+
+ACTIONS=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+add_action() {
+  ACTIONS="${ACTIONS}${1}"$'\n'
+}
 
 MODE="${1:---help}"
 
@@ -27,6 +32,9 @@ case "$MODE" in
     echo "  --compare  Run toolchain and compare against existing baseline.json"
     echo "  --check    Run toolchain and output metrics (no comparison)"
     echo "  --help     Show this help"
+    echo ""
+    echo "All intermediate files are written to a temp directory."
+    echo "Only baseline.json is written to the project root."
     exit 0
     ;;
   *)
@@ -42,11 +50,81 @@ if [ "$MODE" = "--compare" ] && [ ! -f "$BASELINE_FILE" ]; then
   MODE="--init"
 fi
 
-# Clear actions file
-: > "$ACTIONS_FILE"
+resolve_phpmetrics() {
+  if [ -f "vendor/bin/phpmetrics" ]; then
+    echo "vendor/bin/phpmetrics"
+  elif command -v phpmetrics &> /dev/null; then
+    echo "phpmetrics"
+  elif [ -f "$HOME/.composer/vendor/bin/phpmetrics" ]; then
+    echo "$HOME/.composer/vendor/bin/phpmetrics"
+  else
+    echo ""
+  fi
+}
+
+resolve_pint() {
+  if [ -f "vendor/bin/pint" ]; then
+    echo "vendor/bin/pint"
+  elif command -v pint &> /dev/null; then
+    echo "pint"
+  else
+    echo ""
+  fi
+}
+
+resolve_phpcsfixer() {
+  if [ -f "vendor/bin/php-cs-fixer" ]; then
+    echo "vendor/bin/php-cs-fixer"
+  elif command -v php-cs-fixer &> /dev/null; then
+    echo "php-cs-fixer"
+  else
+    echo ""
+  fi
+}
+
+resolve_phpstan() {
+  if [ -f "vendor/bin/phpstan" ]; then
+    echo "vendor/bin/phpstan"
+  elif command -v phpstan &> /dev/null; then
+    echo "phpstan"
+  else
+    echo ""
+  fi
+}
+
+resolve_psalm() {
+  if [ -f "vendor/bin/psalm" ]; then
+    echo "vendor/bin/psalm"
+  elif command -v psalm &> /dev/null; then
+    echo "psalm"
+  else
+    echo ""
+  fi
+}
+
+resolve_phpunit() {
+  if [ -f "vendor/bin/phpunit" ]; then
+    echo "vendor/bin/phpunit"
+  elif command -v phpunit &> /dev/null; then
+    echo "phpunit"
+  else
+    echo ""
+  fi
+}
+
+resolve_pest() {
+  if [ -f "vendor/bin/pest" ]; then
+    echo "vendor/bin/pest"
+  elif command -v pest &> /dev/null; then
+    echo "pest"
+  else
+    echo ""
+  fi
+}
 
 echo "=== Ratchet Babysit: PHP Quality Gate ==="
 echo "Mode: $MODE"
+echo "Temp dir: $TMPDIR"
 echo ""
 
 # ---- Step 1: Security Audit ----
@@ -56,17 +134,17 @@ SEC_HIGH=0
 SEC_MEDIUM=0
 SEC_LOW=0
 if command -v composer &> /dev/null; then
-  composer audit --format=json 2>/dev/null > "$REPORTS_DIR/composer-audit.json" || true
-  if [ -f "$REPORTS_DIR/composer-audit.json" ]; then
-    SEC_CRITICAL=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/composer-audit.json')); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='critical'))" 2>/dev/null || echo "0")
-    SEC_HIGH=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/composer-audit.json')); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='high'))" 2>/dev/null || echo "0")
-    SEC_MEDIUM=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/composer-audit.json')); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='medium'))" 2>/dev/null || echo "0")
-    SEC_LOW=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/composer-audit.json')); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='low'))" 2>/dev/null || echo "0")
+  AUDIT_JSON=$(composer audit --format=json 2>/dev/null || true)
+  if [ -n "$AUDIT_JSON" ]; then
+    SEC_CRITICAL=$(echo "$AUDIT_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='critical'))" 2>/dev/null || echo "0")
+    SEC_HIGH=$(echo "$AUDIT_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='high'))" 2>/dev/null || echo "0")
+    SEC_MEDIUM=$(echo "$AUDIT_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='medium'))" 2>/dev/null || echo "0")
+    SEC_LOW=$(echo "$AUDIT_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for a in d.get('advisories',[]) if a.get('severity','')=='low'))" 2>/dev/null || echo "0")
   fi
   if [ "$MODE" != "--init" ]; then
     if [ "$SEC_CRITICAL" -gt 0 ] || [ "$SEC_HIGH" -gt 0 ]; then
       echo -e "${RED}BLOCK: Security audit found ${SEC_CRITICAL} critical, ${SEC_HIGH} high advisories${NC}"
-      echo "[ACTION] ESCALATE: Update dependencies with critical/high vulnerabilities (critical: $SEC_CRITICAL, high: $SEC_HIGH)" >> "$ACTIONS_FILE"
+      add_action "[ACTION] ESCALATE: Update dependencies with critical/high vulnerabilities (critical: $SEC_CRITICAL, high: $SEC_HIGH)"
       [ "$MODE" = "--compare" ] && exit 1
     fi
   fi
@@ -78,19 +156,19 @@ fi
 # ---- Step 2: Code Style ----
 echo "--- Code Style ---"
 LINT_VIOLATIONS=0
-LINT_FILES=""
-if [ -f "vendor/bin/pint" ]; then
-  vendor/bin/pint --test 2>&1 | tee "$REPORTS_DIR/pint-output.txt" || true
-  LINT_VIOLATIONS=$(grep -c "❌" "$REPORTS_DIR/pint-output.txt" 2>/dev/null || echo "0")
+PINT_CMD=$(resolve_pint)
+CSFIXER_CMD=$(resolve_phpcsfixer)
+if [ -n "$PINT_CMD" ]; then
+  PINT_OUTPUT=$($PINT_CMD --test 2>&1 || true)
+  LINT_VIOLATIONS=$(echo "$PINT_OUTPUT" | grep -c "❌" 2>/dev/null || echo "0")
   if [ "$LINT_VIOLATIONS" -gt 0 ]; then
-    LINT_FILES=$(grep "❌" "$REPORTS_DIR/pint-output.txt" 2>/dev/null | sed 's/.*❌ //' | head -20 || true)
-    echo "$LINT_FILES" | while IFS= read -r line; do
-      [ -n "$line" ] && echo "[ACTION] FIX STYLE: $line" >> "$ACTIONS_FILE"
+    echo "$PINT_OUTPUT" | grep "❌" 2>/dev/null | sed 's/.*❌ //' | head -20 | while IFS= read -r line; do
+      [ -n "$line" ] && add_action "[ACTION] FIX STYLE: $line"
     done
   fi
-elif [ -f "vendor/bin/php-cs-fixer" ]; then
-  vendor/bin/php-cs-fixer fix --dry-run --diff 2>&1 | tee "$REPORTS_DIR/cs-fixer-output.txt" || true
-  LINT_VIOLATIONS=$(grep -c "would be changed" "$REPORTS_DIR/cs-fixer-output.txt" 2>/dev/null || echo "0")
+elif [ -n "$CSFIXER_CMD" ]; then
+  CSFIXER_OUTPUT=$($CSFIXER_CMD fix --dry-run --diff 2>&1 || true)
+  LINT_VIOLATIONS=$(echo "$CSFIXER_OUTPUT" | grep -c "would be changed" 2>/dev/null || echo "0")
 else
   echo "No style tool found (Pint or CS-Fixer), skipping"
 fi
@@ -100,27 +178,29 @@ echo "Code style violations: $LINT_VIOLATIONS"
 echo "--- Static Analysis ---"
 SA_ERRORS=0
 SA_WARNINGS=0
-SA_DETAILS=""
-if [ -f "vendor/bin/phpstan" ]; then
-  vendor/bin/phpstan analyse --memory-limit=512M --error-format=json 2>/dev/null > "$REPORTS_DIR/phpstan.json" || true
-  if [ -f "$REPORTS_DIR/phpstan.json" ] && python3 -c "import json" < "$REPORTS_DIR/phpstan.json" 2>/dev/null; then
-    SA_ERRORS=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/phpstan.json')); print(d.get('totals',{}).get('file_errors',0))" 2>/dev/null || echo "0")
-    SA_WARNINGS=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/phpstan.json')); print(d.get('totals',{}).get('errors',0))" 2>/dev/null || echo "0")
+PHPSTAN_CMD=$(resolve_phpstan)
+PSALM_CMD=$(resolve_psalm)
+if [ -n "$PHPSTAN_CMD" ]; then
+  SA_JSON=$($PHPSTAN_CMD analyse --memory-limit=512M --error-format=json 2>/dev/null || true)
+  if [ -n "$SA_JSON" ]; then
+    SA_ERRORS=$(echo "$SA_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('file_errors',0))" 2>/dev/null || echo "0")
+    SA_WARNINGS=$(echo "$SA_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('errors',0))" 2>/dev/null || echo "0")
     if [ "$SA_ERRORS" -gt 0 ]; then
-      SA_DETAILS=$(python3 -c "
-import json
-d = json.load(open('$REPORTS_DIR/phpstan.json'))
+      echo "$SA_JSON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
 for f, errs in d.get('files', {}).items():
     for e in errs.get('messages', [])[:5]:
         msg = e.get('message', '')
         line = e.get('line', '?')
         print(f'[ACTION] FIX SA: {f}:{line} - {msg}')
-" 2>/dev/null || true)
-      echo "$SA_DETAILS" >> "$ACTIONS_FILE"
+" 2>/dev/null || true | while IFS= read -r line; do
+        [ -n "$line" ] && add_action "$line"
+      done
     fi
   fi
-elif [ -f "vendor/bin/psalm" ]; then
-  vendor/bin/psalm --output-format=json 2>/dev/null > "$REPORTS_DIR/psalm.json" || true
+elif [ -n "$PSALM_CMD" ]; then
+  PSALM_JSON=$($PSALM_CMD --output-format=json 2>/dev/null || true)
   echo "Psalm analysis: done (parse JSON for error counts)"
 else
   echo "No static analysis tool found (PHPStan or Psalm), skipping"
@@ -130,13 +210,14 @@ echo "Static analysis errors: $SA_ERRORS, warnings: $SA_WARNINGS"
 # ---- Step 4: Tests & Coverage ----
 echo "--- Tests & Coverage ---"
 COVERAGE_PCT=0.0
-UNCOVERED_FILES=""
-if [ -f "vendor/bin/phpunit" ]; then
-  vendor/bin/phpunit --coverage-clover="$REPORTS_DIR/clover.xml" --coverage-text="$REPORTS_DIR/coverage.txt" 2>&1 | tee "$REPORTS_DIR/phpunit-output.txt" || true
-  if [ -f "$REPORTS_DIR/clover.xml" ]; then
+PHPUNIT_CMD=$(resolve_phpunit)
+PEST_CMD=$(resolve_pest)
+if [ -n "$PHPUNIT_CMD" ]; then
+  $PHPUNIT_CMD --coverage-clover="$TMPDIR/clover.xml" --coverage-text="$TMPDIR/coverage.txt" 2>&1 | tee "$TMPDIR/phpunit-output.txt" || true
+  if [ -f "$TMPDIR/clover.xml" ]; then
     COVERAGE_PCT=$(python3 -c "
 import xml.etree.ElementTree as ET
-tree = ET.parse('$REPORTS_DIR/clover.xml')
+tree = ET.parse('$TMPDIR/clover.xml')
 root = tree.getroot()
 metrics = root.find('.//metrics')
 if metrics is not None:
@@ -147,8 +228,8 @@ else:
     print(0.0)
 " 2>/dev/null || echo "0.0")
   fi
-elif [ -f "vendor/bin/pest" ]; then
-  vendor/bin/pest --coverage --min=0 2>&1 | tee "$REPORTS_DIR/pest-output.txt" || true
+elif [ -n "$PEST_CMD" ]; then
+  $PEST_CMD --coverage --min=0 2>&1 | tee "$TMPDIR/pest-output.txt" || true
 else
   echo "No test runner found (PHPUnit or Pest), skipping"
 fi
@@ -160,34 +241,40 @@ DUP_PCT=0.0
 DUP_DETAILS=""
 DUP_CLONES_COUNT=0
 if command -v npx &> /dev/null; then
-  npx jscpd --threshold 0 --reporters json --output "$REPORTS_DIR" src/ 2>/dev/null || true
-  if [ -f "$REPORTS_DIR/jscpd/jscpd-report.json" ]; then
-    DUP_PCT=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/jscpd/jscpd-report.json')); print(d['statistics']['total']['percentage'])" 2>/dev/null || echo "0.0")
-    DUP_CLONES_COUNT=$(python3 -c "import json; d=json.load(open('$REPORTS_DIR/jscpd/jscpd-report.json')); print(d['statistics']['total']['clones'])" 2>/dev/null || echo "0")
+  npx jscpd --threshold 0 --reporters json --output "$TMPDIR" src/ 2>/dev/null || true
+  JSCPD_REPORT="$TMPDIR/jscpd/jscpd-report.json"
+  if [ -f "$JSCPD_REPORT" ]; then
+    DUP_PCT=$(python3 -c "import json; d=json.load(open('$JSCPD_REPORT')); print(d['statistics']['total']['percentage'])" 2>/dev/null || echo "0.0")
+    DUP_CLONES_COUNT=$(python3 -c "import json; d=json.load(open('$JSCPD_REPORT')); print(d['statistics']['total']['clones'])" 2>/dev/null || echo "0")
     DUP_DETAILS=$(python3 -c "
 import json
-d = json.load(open('$REPORTS_DIR/jscpd/jscpd-report.json'))
+d = json.load(open('$JSCPD_REPORT'))
 for clone in d.get('duplicates', [])[:30]:
-    f1 = clone.get('firstFile', {}).get('name', '?')
+    f1 = clone.get('firstFile', {}).get('name', clone.get('firstFile', {}).get('path', '?'))
     l1_start = clone.get('firstFile', {}).get('start', '?')
     l1_end = clone.get('firstFile', {}).get('end', '?')
-    f2 = clone.get('secondFile', {}).get('name', '?')
+    f2 = clone.get('secondFile', {}).get('name', clone.get('secondFile', {}).get('path', '?'))
     l2_start = clone.get('secondFile', {}).get('start', '?')
     l2_end = clone.get('secondFile', {}).get('end', '?')
-    lines = int(l1_end) - int(l1_start) if isinstance(l1_end, int) and isinstance(l1_start, int) else '?'
+    try:
+        lines = int(l1_end) - int(l1_start)
+    except (ValueError, TypeError):
+        lines = '?'
     print(f'  {f1}:{l1_start}-{l1_end} <-> {f2}:{l2_start}-{l2_end} ({lines}L)')
 " 2>/dev/null || true)
     if [ -n "$DUP_DETAILS" ]; then
       echo -e "${CYAN}Duplicate clones found ($DUP_CLONES_COUNT):${NC}"
       echo "$DUP_DETAILS"
       echo "$DUP_DETAILS" | while IFS= read -r line; do
-        [ -n "$line" ] && echo "[ACTION] REFACTOR DUP: $line" >> "$ACTIONS_FILE"
+        [ -n "$line" ] && add_action "[ACTION] REFACTOR DUP:$line"
       done
     fi
   fi
-elif [ -f "vendor/bin/phpcpd" ]; then
-  vendor/bin/phpcpd src/ 2>&1 | tee "$REPORTS_DIR/phpcpd-output.txt" || true
-  DUP_DETAILS=$(grep -E "^\s+\d+\.\d+%.*duplicated lines" "$REPORTS_DIR/phpcpd-output.txt" 2>/dev/null || echo "")
+elif command -v phpcpd &> /dev/null || [ -f "vendor/bin/phpcpd" ]; then
+  PHPCPD_CMD="phpcpd"
+  [ -f "vendor/bin/phpcpd" ] && PHPCPD_CMD="vendor/bin/phpcpd"
+  PHPCPD_OUTPUT=$($PHPCPD_CMD src/ 2>&1 || true)
+  DUP_DETAILS=$(echo "$PHPCPD_OUTPUT" | grep -A2 "duplicated lines" 2>/dev/null || echo "")
   echo "phpcpd duplication: check output above"
 else
   echo "No duplication tool found (jscpd or phpcpd), skipping"
@@ -208,7 +295,7 @@ while IFS= read -r f; do
   if [ "$lines" -gt 1000 ]; then
     OVERSIZE_FILES="${OVERSIZE_FILES}  ${f} (${lines}L)
 "
-    echo "[ACTION] MODULARIZE: ${f} is ${lines} lines (max 1000)" >> "$ACTIONS_FILE"
+    add_action "[ACTION] MODULARIZE: ${f} is ${lines} lines (max 1000)"
   fi
 done < <(find "$PROJECT_ROOT/src" "$PROJECT_ROOT/app" -name "*.php" 2>/dev/null | head -500)
 echo "Largest file: $MAX_LINES_FILE ($MAX_LINES lines)"
@@ -218,28 +305,64 @@ fi
 
 MAX_CYCLO=0
 MAX_CYCLO_FILE="N/A"
-if [ -f "vendor/bin/phpmetrics" ]; then
-  vendor/bin/phpmetrics --report-html="$REPORTS_DIR/phpmetrics" --report-violations="$REPORTS_DIR/phpmetrics.xml" --report-json="$REPORTS_DIR/phpmetrics.json" src/ 2>/dev/null || true
-  if [ -f "$REPORTS_DIR/phpmetrics.json" ]; then
-    MAX_CYCLO=$(python3 -c "
-import json
-d = json.load(open('$REPORTS_DIR/phpmetrics.json'))
-max_c = 0
-max_f = 'N/A'
-for cls, info in d.get('classes', {}).items():
-    for m, minfo in info.get('methods', {}).items() if isinstance(info.get('methods',{}), dict) else []:
-        cc = minfo if isinstance(minfo, int) else minfo.get('ccn', 0) if isinstance(minfo, dict) else 0
-        if cc > max_c:
-            max_c = cc
-            max_f = f'{cls}::{m}'
-print(f'{max_c}|{max_f}')
+PHPMETRICS_CMD=$(resolve_phpmetrics)
+if [ -n "$PHPMETRICS_CMD" ]; then
+  $PHPMETRICS_CMD --report-json="$TMPDIR/phpmetrics.json" src/ 2>/dev/null || true
+  if [ -f "$TMPDIR/phpmetrics.json" ]; then
+    CYCLO_RESULT=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$TMPDIR/phpmetrics.json'))
+except:
+    print('0|N/A')
+    sys.exit(0)
+max_ccn = 0
+max_method = 'N/A'
+if 'classes' in d:
+    for cls_name, cls_data in d['classes'].items():
+        if not isinstance(cls_data, dict):
+            continue
+        methods = cls_data.get('methods', {})
+        if not isinstance(methods, dict):
+            for m in methods if isinstance(methods, list) else []:
+                if isinstance(m, dict):
+                    ccn = m.get('ccn', 0)
+                    mname = m.get('name', '?')
+                    if ccn > max_ccn:
+                        max_ccn = ccn
+                        max_method = f'{cls_name}::{mname}'
+        else:
+            for mname, mdata in methods.items():
+                if isinstance(mdata, dict):
+                    ccn = mdata.get('ccn', 0)
+                elif isinstance(mdata, (int, float)):
+                    ccn = mdata
+                    mname = mname
+                else:
+                    ccn = 0
+                if ccn > max_ccn:
+                    max_ccn = ccn
+                    max_method = f'{cls_name}::{mname}'
+if max_ccn == 0 and 'files' in d:
+    for fname, fdata in d['files'].items():
+        if not isinstance(fdata, dict):
+            continue
+        fmethods = fdata.get('methods', [])
+        for m in fmethods if isinstance(fmethods, list) else []:
+            if isinstance(m, dict):
+                ccn = m.get('ccn', 0)
+                mname = m.get('name', '?')
+                if ccn > max_ccn:
+                    max_ccn = ccn
+                    max_method = f'{fname}::{mname}'
+print(f'{max_ccn}|{max_method}')
 " 2>/dev/null || echo "0|N/A")
-    MAX_CYCLO_FILE=$(echo "$MAX_CYCLO" | cut -d'|' -f2)
-    MAX_CYCLO=$(echo "$MAX_CYCLO" | cut -d'|' -f1)
+    MAX_CYCLO=$(echo "$CYCLO_RESULT" | cut -d'|' -f1)
+    MAX_CYCLO_FILE=$(echo "$CYCLO_RESULT" | cut -d'|' -f2)
   fi
   echo "phpmetrics: max cyclomatic complexity = $MAX_CYCLO ($MAX_CYCLO_FILE)"
 else
-  echo "phpmetrics not found, skipping complexity check"
+  echo "phpmetrics not found (tried vendor/bin/phpmetrics, ~/.composer/vendor/bin/phpmetrics, global phpmetrics), skipping complexity check"
 fi
 
 # ---- Build Metrics JSON ----
@@ -285,8 +408,9 @@ case "$MODE" in
     echo "$METRICS_JSON"
     echo ""
     echo "=== Required Actions ==="
-    if [ -s "$ACTIONS_FILE" ]; then
-      cat "$ACTIONS_FILE"
+    if [ -n "$ACTIONS" ]; then
+      echo "$ACTIONS"
+      echo "Total: $(echo "$ACTIONS" | grep -c '\[') action(s) required"
     else
       echo "No actions required."
     fi
@@ -304,19 +428,19 @@ case "$MODE" in
     if ! python3 -c "exit(0 if $COVERAGE_PCT >= $BASE_COV else 1)"; then
       PASS=false
       echo -e "${RED}FAIL: Coverage regressed: ${COVERAGE_PCT}% < baseline ${BASE_COV}%${NC}"
-      echo "[ACTION] ADD TESTS: Coverage dropped from ${BASE_COV}% to ${COVERAGE_PCT}%. Add tests for uncovered code paths." >> "$ACTIONS_FILE"
+      add_action "[ACTION] ADD TESTS: Coverage dropped from ${BASE_COV}% to ${COVERAGE_PCT}%. Add tests for uncovered code paths."
     fi
 
     if ! python3 -c "exit(0 if $DUP_PCT <= $BASE_DUP else 1)"; then
       PASS=false
       echo -e "${RED}FAIL: Duplication increased: ${DUP_PCT}% > baseline ${BASE_DUP}%${NC}"
-      echo "[ACTION] REFACTOR DUP: Duplication increased from ${BASE_DUP}% to ${DUP_PCT}% ($DUP_CLONES_COUNT clones found). Extract shared logic into Traits, Actions, or Services." >> "$ACTIONS_FILE"
+      add_action "[ACTION] REFACTOR DUP: Duplication increased from ${BASE_DUP}% to ${DUP_PCT}% ($DUP_CLONES_COUNT clones found). Extract shared logic into Traits, Actions, or Services."
     fi
 
     if [ "$LINT_VIOLATIONS" -gt "$BASE_LINT" ]; then
       PASS=false
       echo -e "${RED}FAIL: Lint violations increased: $LINT_VIOLATIONS > baseline $BASE_LINT${NC}"
-      echo "[ACTION] FIX STYLE: Run vendor/bin/pint to auto-fix style violations" >> "$ACTIONS_FILE"
+      add_action "[ACTION] FIX STYLE: Run vendor/bin/pint to auto-fix style violations"
     fi
 
     if [ "$SA_ERRORS" -gt "$BASE_SA" ]; then
@@ -348,11 +472,9 @@ case "$MODE" in
 
     echo ""
     echo "=== Required Actions ==="
-    ACTIONS_COUNT=$(wc -l < "$ACTIONS_FILE" | tr -d ' ')
-    if [ "$ACTIONS_COUNT" -gt 0 ]; then
-      cat "$ACTIONS_FILE"
-      echo ""
-      echo "Total: $ACTIONS_COUNT action(s) required"
+    if [ -n "$ACTIONS" ]; then
+      echo "$ACTIONS"
+      echo "Total: $(echo "$ACTIONS" | grep -c '\[') action(s) required"
     else
       echo "No actions required."
     fi
@@ -370,11 +492,9 @@ case "$MODE" in
     fi
     echo ""
     echo "=== Required Actions ==="
-    if [ -s "$ACTIONS_FILE" ]; then
-      cat "$ACTIONS_FILE"
-      ACTIONS_COUNT=$(wc -l < "$ACTIONS_FILE" | tr -d ' ')
-      echo ""
-      echo "Total: $ACTIONS_COUNT action(s) required"
+    if [ -n "$ACTIONS" ]; then
+      echo "$ACTIONS"
+      echo "Total: $(echo "$ACTIONS" | grep -c '\[') action(s) required"
     else
       echo "No actions required."
     fi

@@ -41,6 +41,12 @@ bash .opencode/skills/ratchet-babysit/scripts/baseline_check.sh --compare
 bash .opencode/skills/ratchet-babysit/scripts/baseline_check.sh --check
 ```
 
+## Tool Resolution & File Handling
+
+Each tool is resolved: `vendor/bin/<tool>` → `<tool>` in PATH → `~/.composer/vendor/bin/<tool>` → skip. Works with local, global, or standalone installs (PHAR, brew, apt).
+
+**No project directory writes except `baseline.json`.** All intermediate files use a temp directory auto-cleaned on exit.
+
 ## PHP Toolchain (run in order)
 
 1. **Security Audit** — `composer audit` (block on critical/high)

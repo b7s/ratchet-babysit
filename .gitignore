@@ -1,4 +1,1 @@
-reports/
-*.xml
-clover.xml
-composer-audit.json
+baseline.json

@@ -45,6 +45,17 @@ bash .codex/skills/ratchet-babysit/scripts/baseline_check.sh --init
 bash .codex/skills/ratchet-babysit/scripts/baseline_check.sh --compare
 ```
 
+## Tool Resolution & File Handling
+
+The script resolves each tool in this order: **local** (`vendor/bin/<tool>`) → **global** (`<tool>` in PATH) → **composer global** (`~/.composer/vendor/bin/<tool>`) → **skip**.
+
+This means phpmetrics, phpstan, pint, etc. work regardless of how they're installed:
+- `composer require --dev` (project-local)
+- `composer global require` (user-global)
+- Standalone PHAR or package manager (brew, apt)
+
+**No project directory writes except `baseline.json`.** All intermediate files (clover.xml, phpmetrics JSON, jscpd reports, etc.) go to a temp directory (`mktemp -d`) that is auto-cleaned on exit. This avoids needing write permissions to the project directory.
+
 ## PHP Toolchain Integration
 
 Execute and analyze the output of the following tools **in order**:
