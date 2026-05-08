@@ -2,7 +2,9 @@
 
 > **Quality only goes up. Never down.** That's the ratchet.
 
-A [Codex CLI](https://github.com/openai/codex) skill that acts as a **Quality Guardian** for PHP projects, enforcing the **Ratchet (catraca)** principle on every Pull Request: quality metrics can only improve or stay the same — they can **never regress**.
+A multi-agent AI skill that acts as a **Quality Guardian** for PHP projects, enforcing the **Ratchet (catraca)** principle on every Pull Request: quality metrics can only improve or stay the same — they can **never regress**.
+
+Works with **OpenCode**, **Claude Code**, and **OpenAI Codex**.
 
 ## How It Works
 
@@ -23,24 +25,24 @@ PR Submitted → Run Toolchain → Compare vs Baseline → Pass? → Update base
 
 ### 1. Install the skill
 
-Copy the `.codex/` directory into your PHP project root:
+Copy the appropriate skill directory into your project:
 
-```bash
-cp -r .codex/ /path/to/your-php-project/.codex/
-```
+| Agent | Install path |
+|---|---|
+| OpenCode | `.opencode/skills/ratchet-babysit/` |
+| Claude Code | `.claude/skills/ratchet-babysit/` |
+| Codex (OpenAI) | `.codex/skills/ratchet-babysit/` |
 
 Or add as a submodule:
 
 ```bash
-git submodule add https://github.com/b7s/ratchet-babysit.git .codex/skills/ratchet-babysit
+git submodule add https://github.com/b7s/ratchet-babysit.git .opencode/skills/ratchet-babysit
 ```
 
 ### 2. Establish a baseline
 
-On the first run, initialize `baseline.json` in your project root:
-
 ```bash
-bash .codex/skills/ratchet-babysit/scripts/baseline_check.sh --init
+bash .opencode/skills/ratchet-babysit/scripts/baseline_check.sh --init
 ```
 
 ### 3. Commit `baseline.json`
@@ -54,30 +56,44 @@ git commit -m "chore: establish quality baseline"
 
 ```bash
 # One-shot check (no baseline comparison)
-bash .codex/skills/ratchet-babysit/scripts/baseline_check.sh --check
+bash .opencode/skills/ratchet-babysit/scripts/baseline_check.sh --check
 
 # Compare against baseline
-bash .codex/skills/ratchet-babysit/scripts/baseline_check.sh --compare
+bash .opencode/skills/ratchet-babysit/scripts/baseline_check.sh --compare
 ```
 
-Or let Codex handle it automatically by invoking the skill.
+Or let your AI agent handle it automatically by invoking the skill.
 
 ## Project Structure
 
 ```
-.codex/
-  skills/
-    ratchet-babysit/
-      SKILL.md                  # Main skill definition (YAML frontmatter + instructions)
-      agents/
-        openai.yaml              # Agent configuration (model, reasoning)
-      references/
-        baseline-schema.md       # baseline.json schema documentation
-        quality-gates.md         # Quality gate decision matrix
-        toolchain.md             # PHP toolchain commands reference
-      scripts/
-        baseline_check.sh        # Executable script for running the quality pipeline
+.opencode/skills/ratchet-babysit/     # OpenCode skill
+.claude/skills/ratchet-babysit/        # Claude Code skill (symlinks to shared files)
+.codex/skills/ratchet-babysit/         # Codex skill (canonical location)
+├── SKILL.md                           # Skill definition (YAML frontmatter + instructions)
+├── agents/
+│   └── openai.yaml                    # OpenAI Codex agent config
+├── references/
+│   ├── baseline-schema.md             # baseline.json schema + comparison rules
+│   ├── quality-gates.md               # Quality gate decision matrix
+│   └── toolchain.md                   # PHP toolchain commands reference
+└── scripts/
+    └── baseline_check.sh               # Executable script: --init, --compare, --check
 ```
+
+Each agent's SKILL.md has tool-specific frontmatter:
+
+| Frontmatter Field | OpenCode | Claude Code | Codex |
+|---|---|---|---|
+| `name` | Yes | Yes | Yes |
+| `description` | Yes | Yes | Yes |
+| `license` | Yes | — | — |
+| `compatibility` | Yes | — | — |
+| `metadata` | Yes | — | — |
+| `allowed-tools` | — | Yes | — |
+| `effort` | — | Yes | — |
+| `context` | — | Yes | — |
+| `agent` | — | Yes | — |
 
 ## Quality Gate Summary
 
@@ -94,7 +110,9 @@ Or let Codex handle it automatically by invoking the skill.
 
 ## Baseline Schema
 
-The `baseline.json` file tracks all metrics:
+See `.codex/skills/ratchet-babysit/references/baseline-schema.md` for the full specification.
+
+Example `baseline.json`:
 
 ```json
 {
@@ -107,37 +125,16 @@ The `baseline.json` file tracks all metrics:
     "lint_violations": 0,
     "phpstan_errors": 0,
     "phpstan_warnings": 5,
-    "security_advisories": {
-      "critical": 0,
-      "high": 0,
-      "medium": 1,
-      "low": 3
-    },
-    "file_sizes": {
-      "max_lines": 623,
-      "max_lines_file": "app/Services/PaymentService.php"
-    },
-    "cyclomatic_complexity": {
-      "max_per_method": 14,
-      "max_per_method_file": "App\\Services\\PaymentService::process"
-    }
+    "security_advisories": { "critical": 0, "high": 0, "medium": 1, "low": 3 },
+    "file_sizes": { "max_lines": 623, "max_lines_file": "app/Services/PaymentService.php" },
+    "cyclomatic_complexity": { "max_per_method": 14, "max_per_method_file": "App\\Services\\PaymentService::process" }
   }
 }
 ```
 
-See `.codex/skills/ratchet-babysit/references/baseline-schema.md` for the full specification.
-
 ## Why "Ratchet"?
 
 A ratchet (catraca in Portuguese) only turns in one direction. Applied to code quality, this means every PR must maintain or improve the current metrics — never regress them. Over time, this guarantees your codebase quality **monotonically increases**.
-
-## Why Use This Skill?
-
-- **Eliminates the human bottleneck** — the AI acts as a first-pass reviewer, catching PSR violations, coverage drops, and quality regressions before a human ever sees the code.
-- **Forces modularization** — hard cap of 1,000 lines per file prevents unmaintainable monoliths.
-- **Artifact-driven, not guesswork** — reads `clover.xml`, `jscpd` reports, and `phpmetrics` HTML to know exactly where quality dropped.
-- **Iterative self-healing** — doesn't just report failures; it fixes them (up to 5 iterations) before escalating.
-- **Codex-native** — follows the OpenAI Codex skill structure with SKILL.md frontmatter, scripts, references, and agent config.
 
 ## License
 
