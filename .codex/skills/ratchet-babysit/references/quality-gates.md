@@ -22,9 +22,22 @@ When the babysitting loop encounters failures, fix them in this priority order:
 2. **Code style violations** — usually auto-fixable with `vendor/bin/pint` (without `--test`) or `vendor/bin/php-cs-fixer fix`
 3. **Static analysis errors** — fix type annotations, add missing return types, fix structural issues
 4. **Test coverage gaps** — add missing test cases for uncovered code paths
-5. **Duplication** — extract shared logic into Traits, Actions, or Services
+5. **Duplication** — extract shared logic into Traits, Actions, or Services; see clone details for exact locations
 6. **File size over 1000 lines** — modularize: extract into Traits, Actions, Services, or separate classes
 7. **Cyclomatic complexity > 50** — decompose methods into smaller, focused units
+
+## Required Actions Output
+
+Every run produces a `reports/required_actions.txt` file with one `[ACTION]` per line, ordered by priority:
+
+| Prefix | Meaning | Example |
+|---|---|---|
+| `[ACTION] ESCALATE:` | Human intervention required | `[ACTION] ESCALATE: Update dependencies with critical/high vulnerabilities (critical: 2, high: 1)` |
+| `[ACTION] FIX STYLE:` | Auto-fixable style violation | `[ACTION] FIX STYLE: app/Http/Controllers/UserController.php` |
+| `[ACTION] FIX SA:` | Static analysis error with location | `[ACTION] FIX SA: app/Models/User.php:42 - Property User::$name is never read` |
+| `[ACTION] ADD TESTS:` | Coverage regression | `[ACTION] ADD TESTS: Coverage dropped from 82% to 78%. Add tests for uncovered code paths.` |
+| `[ACTION] REFACTOR DUP:` | Duplicate code with file:line ranges | `[ACTION] REFACTOR DUP: src/ServiceA.php:10-50 <-> src/ServiceB.php:100-140 (40L)` |
+| `[ACTION] MODULARIZE:` | File exceeds 1000 lines | `[ACTION] MODULARIZE: app/Services/PaymentService.php is 1200 lines (max 1000)` |
 
 ## Classification Guide
 
@@ -35,12 +48,27 @@ When the babysitting loop encounters failures, fix them in this priority order:
 | Style violation (Pint/CS-Fixer) | Yes | |
 | Missing type annotation | Yes | |
 | Missing test for new code | Yes | |
-| Duplicated logic extractable to service | Yes | |
+| Duplicated logic extractable to service (see REFACTOR DUP actions) | Yes | |
 | Large file modularizable into traits | Yes | |
 | Critical dependency vulnerability | | Yes |
 | Breaking change required in dependencies | | Yes |
 | Architectural design decision needed | | Yes |
 | 5 iterations exhausted | | Yes |
+
+## Duplication Detail Extraction
+
+The `baseline_check.sh` script extracts duplicate clone details from `jscpd` JSON output. Each clone shows:
+
+```
+src/ServiceA.php:10-50 <-> src/ServiceB.php:100-140 (40L)
+```
+
+Meaning: lines 10-50 of `src/ServiceA.php` are duplicated in lines 100-140 of `src/ServiceB.php`, spanning 40 lines.
+
+When refactoring:
+- **Small clones (< 10L):** Consider whether they're coincidental or truly duplicated logic.
+- **Medium clones (10-30L):** Extract to a shared Trait or Action class.
+- **Large clones (> 30L):** Extract to a dedicated Service class with an interface.
 
 ## First Run Behavior
 

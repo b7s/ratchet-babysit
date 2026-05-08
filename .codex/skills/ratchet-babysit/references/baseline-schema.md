@@ -13,6 +13,7 @@ The `baseline.json` file lives in the project root and tracks quality metrics ov
   "metrics": {
     "coverage_percent": "float — test coverage percentage",
     "duplication_percent": "float — code duplication percentage",
+    "duplication_clones": "integer — number of duplicate code blocks found",
     "lint_violations": "integer — number of style violations",
     "phpstan_errors": "integer — number of PHPStan/Psalm errors",
     "phpstan_warnings": "integer — number of PHPStan/Psalm warnings (non-blocking)",
@@ -44,6 +45,7 @@ The `baseline.json` file lives in the project root and tracks quality metrics ov
   "metrics": {
     "coverage_percent": 82.5,
     "duplication_percent": 3.2,
+    "duplication_clones": 5,
     "lint_violations": 0,
     "phpstan_errors": 0,
     "phpstan_warnings": 5,
@@ -65,6 +67,18 @@ The `baseline.json` file lives in the project root and tracks quality metrics ov
 }
 ```
 
+## New Fields in Version 1
+
+### `duplication_clones`
+
+Added to track the **number of duplicate code blocks** found by `jscpd`. While `duplication_percent` tells you the overall duplication ratio, `duplication_clones` tells you how many discrete locations have duplicated code. This is useful for:
+
+- Prioritizing which duplicates to refactor first (fewer large clones vs many small ones)
+- Understanding whether duplication is concentrated or spread across many files
+- Tracking whether refactoring actually reduced the number of clone instances
+
+The **per-clone details** (file:line ranges) are stored in `reports/jscpd/jscpd-report.json` and displayed in the script output — they are not stored in `baseline.json` to keep it compact.
+
 ## Versioning Rules
 
 - `version` starts at `1` and must be incremented if the schema changes in a backward-incompatible way.
@@ -83,6 +97,7 @@ For each metric:
 |---|---|---|
 | `coverage_percent` | `current >= baseline` | Current < baseline (any regression) |
 | `duplication_percent` | `current <= baseline` | Current > baseline (any increase) |
+| `duplication_clones` | `current <= baseline` | Current > baseline (any new clones) |
 | `lint_violations` | `current <= baseline` | Current > baseline (any new violation) |
 | `phpstan_errors` | `current <= baseline` | Current > baseline (any new error) |
 | `phpstan_warnings` | Tracked only | No comparison (informational) |
@@ -92,3 +107,11 @@ For each metric:
 | `security_advisories.low` | `current <= baseline` | Any increase |
 | `file_sizes.max_lines` | `current <= 1000` | Any file > 1000 lines |
 | `cyclomatic_complexity.max_per_method` | `current <= 50` | Any method > 50 (warn > 20) |
+
+## Duplicate Clone Details
+
+Per-clone details are **not** stored in `baseline.json` (to keep it compact) but are available in:
+
+- **Script output**: The `baseline_check.sh` script displays each duplicate clone with file:line ranges
+- **`reports/jscpd/jscpd-report.json`**: Full JSON report with all clone details
+- **`reports/required_actions.txt`**: Each clone appears as `[ACTION] REFACTOR DUP: file1:start-end <-> file2:start-end (linesL)`
